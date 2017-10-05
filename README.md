@@ -378,6 +378,34 @@ class ExampleTypeFieldSerializer(
 ```
 
 
+## `unhanlded.UnhandledSerializer`
+
+This serializer supports including non-field items on both
+serialization and deserialization.  This allows, for example, dumping
+everything not included in the serializer schema into `JSONField` in the DB
+and including everything from that `JSONField` in the DB in the
+representation.  Use `Meta.unhandled_kwargs` or the `unhandled_kwargs` keyward
+argument on instantiation to control the processing of unhandled items as you
+would with `rest_framework.fields.DictField`:
+
+```Python
+from rest_framework import serializers
+
+from drf_extra_fields import unhandled
+
+
+class ExampleUnhandledSerializer(unhandled.UnhandledSerializer):
+    """
+    An example serializer that puts non-field items into `unhandled`.
+    """
+
+    foo = serializers.CharField(source='qux', required=False)
+
+    class Meta:
+        unhandled_kwargs = {'source': 'unhandled'}
+```
+
+
 ## `serializer_formats`: Serializer-based formats/renderers/parsers
 
 Support for defining JSON formats using DRF serializers.
