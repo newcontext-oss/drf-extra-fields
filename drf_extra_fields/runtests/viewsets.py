@@ -45,3 +45,11 @@ class ExampleViewSetWOModel(viewsets.UUIDModelViewSet):
         serializer = self.get_serializer(
             instance=models.Person.objects.create())
         return response.Response(serializer.data)
+
+
+class ExampleUnhandledTypeFieldViewset(viewsets.UUIDModelViewSet):
+    """
+    A generic viewset with a type field that processes unknown types.
+    """
+
+    serializer_class = serializers.ExampleUnhandledTypeFieldSerializer

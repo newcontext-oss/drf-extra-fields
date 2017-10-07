@@ -142,7 +142,7 @@ class SerializerParameterFieldBase(serializers.Field, composite.Cloner):
             self,
             urlconf=settings.ROOT_URLCONF, inflectors=inflectors,
             specific_serializers={}, specific_serializers_by_type={},
-            skip=True, **kwargs):
+            unhandled_serializer=None, skip=True, **kwargs):
         """Map parameters to serializers/fields per `specific_serializers`.
 
         `specific_serializers` maps parameter keys (e.g. string "types") to
@@ -171,6 +171,7 @@ class SerializerParameterFieldBase(serializers.Field, composite.Cloner):
         self.inflectors = inflectors
         self._specific_serializers = specific_serializers
         self._specific_serializers_by_type = specific_serializers_by_type
+        self.unhandled_serializer = unhandled_serializer
 
         self.skip = skip
         self.validators.append(SerializerParameterValidator())
@@ -240,7 +241,9 @@ class SerializerParameterFieldBase(serializers.Field, composite.Cloner):
         """
         The specific serializer corresponding to the parameter.
         """
-        if data not in self.specific_serializers:
+        if (
+                data not in self.specific_serializers and
+                self.unhandled_serializer is not None):
             self.fail('unknown', value=data)
 
         # if the generic serializer ends up using a serializer other than

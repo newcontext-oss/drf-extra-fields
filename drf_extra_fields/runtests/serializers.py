@@ -67,3 +67,15 @@ class ExampleSerializerWOModel(serializers.Serializer):
         Just return the validated data.
         """
         return validated_data
+
+
+class ExampleUnhandledTypeFieldSerializer(
+        parameterized.ParameterizedGenericSerializer):
+    """
+    A simple serializer for testing a type field parameter.
+    """
+
+    type = parameterized.SerializerParameterField(
+        specific_serializers={"foo-type": ExampleChildSerializer()},
+        unhandled_serializer=ExampleSerializerWOModel,
+        source='*')

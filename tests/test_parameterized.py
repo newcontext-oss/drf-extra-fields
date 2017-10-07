@@ -450,3 +450,21 @@ class TestParameterizedSerializerFields(test.APITestCase):
         self.assertEqual(
             parameter, 'people',
             'Wrong looked up type parameter from instance')
+
+    def test_unhandled_parameter(self):
+        """
+        Test using a default serializer for unknown parameters.
+        """
+        invalid_parameter_data = dict(self.type_field_data, type="bar-type")
+        create_response = self.client.post(
+            '/types-unhandled/', invalid_parameter_data, format='json')
+        self.assertEqual(
+            create_response.status_code, 200,
+            'Unhandled type create request failed:\n{0}'.format(
+                pprint.pformat(create_response.data)))
+        self.assertIn(
+            'type', create_response.data,
+            'Missing invalid parameter validation error')
+        self.assertEqual(
+            'bar-type', create_response.data['type'],
+            'Wrong unhandled type value')

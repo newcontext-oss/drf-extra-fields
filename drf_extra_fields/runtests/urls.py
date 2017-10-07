@@ -10,6 +10,9 @@ router.register(
     'types', viewsets.ExampleTypeFieldViewset, base_name='types')
 router.register(
     'wo-model', viewsets.ExampleViewSetWOModel, base_name='wo-model')
+router.register(
+    'types-unhandled', viewsets.ExampleUnhandledTypeFieldViewset,
+    base_name='types-unhandled')
 
 override_router = routers.DefaultRouter()
 override_router.register('people', viewsets.OverriddenPersonViewSet)
