@@ -55,8 +55,7 @@ class Base64FieldMixin(object):
             except (TypeError, binascii.Error):
                 raise ValidationError(self.INVALID_FILE_MESSAGE)
             # Generate file name:
-            # 12 characters are more than enough.
-            file_name = str(uuid.uuid4())[:12]
+            file_name = str(uuid.uuid4())[:12]  # 12 characters are more than enough.
             # Get the file name extension:
             file_extension = self.get_file_extension(file_name, decoded_file)
             if file_extension not in self.ALLOWED_TYPES:
@@ -82,7 +81,7 @@ class Base64FieldMixin(object):
 
 class Base64ImageField(Base64FieldMixin, ImageField):
     """
-    A django-rest-framework field for handling image-upload raw post data.
+    A django-rest-framework field for handling image-uploads through raw post data.
     It uses base64 for en-/decoding the contents of the file.
     """
     ALLOWED_TYPES = (
@@ -100,9 +99,27 @@ class Base64ImageField(Base64FieldMixin, ImageField):
         return extension
 
 
+class HybridImageField(Base64ImageField):
+    """
+    A django-rest-framework field for handling image-uploads through
+    raw post data, with a fallback to multipart form data.
+    """
+
+    def to_internal_value(self, data):
+        """
+        Try Base64Field first, and then try the ImageField
+        ``to_internal_value``, MRO doesn't work here because
+        Base64FieldMixin throws before ImageField can run.
+        """
+        try:
+            return Base64FieldMixin.to_internal_value(self, data)
+        except ValidationError:
+            return ImageField.to_internal_value(self, data)
+
+
 class Base64FileField(Base64FieldMixin, FileField):
     """
-    A django-rest-framework field for handling file-upload raw post data.
+    A django-rest-framework field for handling file-uploads through raw post data.
     It uses base64 for en-/decoding the contents of the file.
     """
     ALLOWED_TYPES = NotImplementedError('List allowed file extensions')
@@ -110,8 +127,7 @@ class Base64FileField(Base64FieldMixin, FileField):
     INVALID_TYPE_MESSAGE = _("The type of the file couldn't be determined.")
 
     def get_file_extension(self, filename, decoded_file):
-        raise NotImplemented(
-            'Implement file validation and return matching extension.')
+        raise NotImplemented('Implement file validation and return matching extension.')
 
 
 class RangeField(DictField):
@@ -119,8 +135,7 @@ class RangeField(DictField):
     range_type = None
 
     default_error_messages = {
-        'not_a_dict': _(
-            'Expected a dictionary of items but got type "{input_type}".'),
+        'not_a_dict': _('Expected a dictionary of items but got type "{input_type}".'),
         'too_much_content': _('Extra content not allowed "{extra}".'),
     }
 
@@ -138,8 +153,7 @@ class RangeField(DictField):
                 value = data.pop(key)
             except KeyError:
                 continue
-            validated_dict[
-                six.text_type(key)] = self.child.run_validation(value)
+            validated_dict[six.text_type(key)] = self.child.run_validation(value)
         for key in ('bounds', 'empty'):
             try:
                 value = data.pop(key)
@@ -147,8 +161,7 @@ class RangeField(DictField):
                 continue
             validated_dict[six.text_type(key)] = value
         if data:
-            self.fail('too_much_content', extra=', '.join(
-                map(str, data.keys())))
+            self.fail('too_much_content', extra=', '.join(map(str, data.keys())))
         return self.range_type(**validated_dict)
 
     def to_representation(self, value):
@@ -157,10 +170,8 @@ class RangeField(DictField):
         """
         if value.isempty:
             return {'empty': True}
-        lower = self.child.to_representation(
-            value.lower) if value.lower is not None else None
-        upper = self.child.to_representation(
-            value.upper) if value.upper is not None else None
+        lower = self.child.to_representation(value.lower) if value.lower is not None else None
+        upper = self.child.to_representation(value.upper) if value.upper is not None else None
         return {'lower': lower,
                 'upper': upper,
                 'bounds': value._bounds}
@@ -190,11 +201,7 @@ if postgres_fields is not None:
     # monkey patch modelserializer to map Native django Range fields to
     # drf_extra_fiels's Range fields.
     from rest_framework.serializers import ModelSerializer
-    ModelSerializer.serializer_field_mapping[
-        postgres_fields.DateTimeRangeField] = DateTimeRangeField
-    ModelSerializer.serializer_field_mapping[
-        postgres_fields.DateRangeField] = DateRangeField
-    ModelSerializer.serializer_field_mapping[
-        postgres_fields.IntegerRangeField] = IntegerRangeField
-    ModelSerializer.serializer_field_mapping[
-        postgres_fields.FloatRangeField] = FloatRangeField
+    ModelSerializer.serializer_field_mapping[postgres_fields.DateTimeRangeField] = DateTimeRangeField
+    ModelSerializer.serializer_field_mapping[postgres_fields.DateRangeField] = DateRangeField
+    ModelSerializer.serializer_field_mapping[postgres_fields.IntegerRangeField] = IntegerRangeField
+    ModelSerializer.serializer_field_mapping[postgres_fields.FloatRangeField] = FloatRangeField

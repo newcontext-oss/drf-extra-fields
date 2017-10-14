@@ -1,10 +1,15 @@
 import datetime
 import base64
 import os
+import unittest
 
 import django
+from django.core.exceptions import ValidationError
 from django.test import TestCase, override_settings
-from django.utils import timezone
+
+from mock import patch
+import pytz
+
 from rest_framework import serializers
 
 from drf_extra_fields import compat
@@ -15,11 +20,9 @@ from drf_extra_fields.fields import (
     DateRangeField,
     DateTimeRangeField,
     FloatRangeField,
+    HybridImageField,
     IntegerRangeField,
 )
-
-
-import pytest
 
 
 class UploadedBase64Image(object):
@@ -53,13 +56,6 @@ class DownloadableBase64File(object):
 class UploadedBase64ImageSerializer(serializers.Serializer):
     file = Base64ImageField(required=False)
     created = serializers.DateTimeField()
-
-    def update(self, instance, validated_data):
-        instance.file = validated_data['file']
-        return instance
-
-    def create(self, validated_data):
-        return UploadedBase64Image(**validated_data)
 
 
 class DownloadableBase64ImageSerializer(serializers.Serializer):
@@ -136,6 +132,19 @@ class Base64ImageSerializerTests(TestCase):
         finally:
             os.remove('im.jpg')
 
+    def test_hybrid_image_field(self):
+        field = HybridImageField()
+        with patch('drf_extra_fields.fields.Base64FieldMixin') as mixin_patch:
+            field.to_internal_value({})
+            self.assertTrue(mixin_patch.to_internal_value.called)
+
+        with patch('drf_extra_fields.fields.Base64FieldMixin') as mixin_patch:
+            mixin_patch.to_internal_value.side_effect = ValidationError('foobar')
+            with patch('drf_extra_fields.fields.ImageField') as image_patch:
+                field.to_internal_value({})
+                self.assertTrue(mixin_patch.to_internal_value.called)
+                self.assertTrue(image_patch.to_internal_value.called)
+
 
 class PDFBase64FileField(Base64FileField):
     ALLOWED_TYPES = ('pdf',)
@@ -147,13 +156,6 @@ class PDFBase64FileField(Base64FileField):
 class UploadedBase64FileSerializer(serializers.Serializer):
     file = PDFBase64FileField(required=False)
     created = serializers.DateTimeField()
-
-    def update(self, instance, validated_data):
-        instance.file = validated_data['file']
-        return instance
-
-    def create(self, validated_data):
-        return UploadedBase64File(**validated_data)
 
 
 class DownloadableBase64FileSerializer(serializers.Serializer):
@@ -198,8 +200,7 @@ class Base64FileSerializerTests(TestCase):
         """
         now = datetime.datetime.now()
         errmsg = "Please upload a valid file."
-        serializer = UploadedBase64FileSerializer(data={'created': now,
-                                                        'file': 'abc'})
+        serializer = UploadedBase64FileSerializer(data={'created': now, 'file': 'abc'})
         self.assertFalse(serializer.is_valid())
         self.assertEqual(serializer.errors, {'file': [errmsg]})
 
@@ -240,13 +241,6 @@ class SavePoint(object):
 class PointSerializer(serializers.Serializer):
     point = PointField(required=False)
     created = serializers.DateTimeField()
-
-    def update(self, instance, validated_data):
-        instance.point = validated_data['point']
-        return instance
-
-    def create(self, validated_data):
-        return SavePoint(**validated_data)
 
 
 class PointSerializerTest(TestCase):
@@ -309,17 +303,6 @@ class PointSerializerTest(TestCase):
         serializer = PointSerializer(data={'created': now, 'point': point})
         self.assertFalse(serializer.is_valid())
 
-# Backported from django_rest_framework/tests/test_fields.py
-
-
-def get_items(mapping_or_list_of_two_tuples):
-    # Tests accept either lists of two tuples, or dictionaries.
-    if isinstance(mapping_or_list_of_two_tuples, dict):
-        # {value: expected}
-        return mapping_or_list_of_two_tuples.items()
-    # [(value, expected), ...]
-    return mapping_or_list_of_two_tuples
-
 
 class FieldValues:
     """
@@ -330,30 +313,30 @@ class FieldValues:
         """
         Ensure that valid values return the expected validated data.
         """
-        for input_value, expected_output in get_items(self.valid_inputs):
+        for input_value, expected_output in self.valid_inputs:
             assert self.field.run_validation(input_value) == expected_output
 
     def test_invalid_inputs(self):
         """
         Ensure that invalid values raise the expected validation error.
         """
-        for input_value, expected_failure in get_items(self.invalid_inputs):
-            with pytest.raises(serializers.ValidationError) as exc_info:
+        for input_value, expected_failure in self.invalid_inputs:
+            with self.assertRaises(serializers.ValidationError) as exc_info:
                 self.field.run_validation(input_value)
-            assert exc_info.value.detail == expected_failure
+            assert exc_info.exception.detail == expected_failure
 
     def test_outputs(self):
-        for output_value, expected_output in get_items(self.outputs):
+        for output_value, expected_output in self.outputs:
             assert self.field.to_representation(
                 output_value) == expected_output
 
 # end of backport
 
 
-@pytest.mark.skipif(django.VERSION < (1, 8) or compat.postgres_fields is None,
-                    reason='RangeField is only available for django1.8+'
-                    ' and with psycopg2.')
-class TestIntegerRangeField(FieldValues):
+@unittest.skipIf(
+    django.VERSION < (1, 8) or compat.postgres_fields is None,
+    reason='RangeField is only available for django1.8+ and with psycopg2.')
+class TestIntegerRangeField(TestCase, FieldValues):
     """
     Values for `ListField` with CharField as child.
     """
@@ -387,20 +370,20 @@ class TestIntegerRangeField(FieldValues):
     field = IntegerRangeField()
 
     def test_no_source_on_child(self):
-        with pytest.raises(AssertionError) as exc_info:
+        with self.assertRaises(AssertionError) as exc_info:
             IntegerRangeField(child=serializers.IntegerField(source='other'))
 
-        assert str(exc_info.value) == (
+        assert str(exc_info.exception) == (
             "The `source` argument is not meaningful "
             "when applied to a `child=` field. "
             "Remove `source=` from the field declaration."
         )
 
 
-@pytest.mark.skipif(django.VERSION < (1, 8) or compat.postgres_fields is None,
-                    reason='RangeField is only available for django1.8+'
-                    ' and with psycopg2.')
-class TestFloatRangeField(FieldValues):
+@unittest.skipIf(
+    django.VERSION < (1, 8) or compat.postgres_fields is None,
+    reason='RangeField is only available for django1.8+ and with psycopg2.')
+class TestFloatRangeField(TestCase, FieldValues):
     """
     Values for `ListField` with CharField as child.
     """
@@ -434,19 +417,19 @@ class TestFloatRangeField(FieldValues):
     field = FloatRangeField()
 
     def test_no_source_on_child(self):
-        with pytest.raises(AssertionError) as exc_info:
+        with self.assertRaises(AssertionError) as exc_info:
             FloatRangeField(child=serializers.IntegerField(source='other'))
 
-        assert str(exc_info.value) == (
+        assert str(exc_info.exception) == (
             "The `source` argument is not meaningful "
             "when applied to a `child=` field. "
             "Remove `source=` from the field declaration."
         )
 
 
-@pytest.mark.skipif(django.VERSION < (1, 8) or compat.postgres_fields is None,
-                    reason='RangeField is only available for django1.8+'
-                    ' and with psycopg2.')
+@unittest.skipIf(
+    django.VERSION < (1, 8) or compat.postgres_fields is None,
+    reason='RangeField is only available for django1.8+ and with psycopg2.')
 @override_settings(USE_TZ=True)
 class TestDateTimeRangeField(TestCase, FieldValues):
     """
@@ -458,22 +441,18 @@ class TestDateTimeRangeField(TestCase, FieldValues):
               'upper': '2001-02-02T13:00:00Z',
               'bounds': '[)'},
              compat.DateTimeTZRange(
-                 **{'lower': datetime.datetime(
-                     2001, 1, 1, 13, 00, tzinfo=timezone.utc),
-                    'upper': datetime.datetime(
-                     2001, 2, 2, 13, 00, tzinfo=timezone.utc),
+                 **{'lower': datetime.datetime(2001, 1, 1, 13, 00, tzinfo=pytz.utc),
+                    'upper': datetime.datetime(2001, 2, 2, 13, 00, tzinfo=pytz.utc),
                     'bounds': '[)'})),
             ({'upper': '2001-02-02T13:00:00Z',
               'bounds': '[)'},
              compat.DateTimeTZRange(
-                 **{'upper': datetime.datetime(
-                     2001, 2, 2, 13, 00, tzinfo=timezone.utc),
+                 **{'upper': datetime.datetime(2001, 2, 2, 13, 00, tzinfo=pytz.utc),
                     'bounds': '[)'})),
             ({'lower': '2001-01-01T13:00:00Z',
               'bounds': '[)'},
              compat.DateTimeTZRange(
-                 **{'lower': datetime.datetime(
-                     2001, 1, 1, 13, 00, tzinfo=timezone.utc),
+                 **{'lower': datetime.datetime(2001, 1, 1, 13, 00, tzinfo=pytz.utc),
                     'bounds': '[)'})),
             ({'empty': True},
              compat.DateTimeTZRange(**{'empty': True})),
@@ -489,10 +468,8 @@ class TestDateTimeRangeField(TestCase, FieldValues):
         ]
         outputs = [
             (compat.DateTimeTZRange(
-                **{'lower': datetime.datetime(
-                    2001, 1, 1, 13, 00, tzinfo=timezone.utc),
-                   'upper': datetime.datetime(
-                    2001, 2, 2, 13, 00, tzinfo=timezone.utc)}),
+                **{'lower': datetime.datetime(2001, 1, 1, 13, 00, tzinfo=pytz.utc),
+                   'upper': datetime.datetime(2001, 2, 2, 13, 00, tzinfo=pytz.utc)}),
                 {'lower': '2001-01-01T13:00:00Z',
                  'upper': '2001-02-02T13:00:00Z',
                  'bounds': '[)'}),
@@ -504,20 +481,20 @@ class TestDateTimeRangeField(TestCase, FieldValues):
     field = DateTimeRangeField()
 
     def test_no_source_on_child(self):
-        with pytest.raises(AssertionError) as exc_info:
+        with self.assertRaises(AssertionError) as exc_info:
             DateTimeRangeField(child=serializers.IntegerField(source='other'))
 
-        assert str(exc_info.value) == (
+        assert str(exc_info.exception) == (
             "The `source` argument is not meaningful "
             "when applied to a `child=` field. "
             "Remove `source=` from the field declaration."
         )
 
 
-@pytest.mark.skipif(django.VERSION < (1, 8) or compat.postgres_fields is None,
-                    reason='RangeField is only available for django1.8+'
-                    ' and with psycopg2.')
-class TestDateRangeField(FieldValues):
+@unittest.skipIf(
+    django.VERSION < (1, 8) or compat.postgres_fields is None,
+    reason='RangeField is only available for django1.8+ and with psycopg2.')
+class TestDateRangeField(TestCase, FieldValues):
     """
     Values for `ListField` with CharField as child.
     """
@@ -566,10 +543,10 @@ class TestDateRangeField(FieldValues):
     field = DateRangeField()
 
     def test_no_source_on_child(self):
-        with pytest.raises(AssertionError) as exc_info:
+        with self.assertRaises(AssertionError) as exc_info:
             DateRangeField(child=serializers.IntegerField(source='other'))
 
-        assert str(exc_info.value) == (
+        assert str(exc_info.exception) == (
             "The `source` argument is not meaningful "
             "when applied to a `child=` field. "
             "Remove `source=` from the field declaration."
