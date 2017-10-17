@@ -53,8 +53,7 @@ class ExampleTypeFieldSerializer(
     type = parameterized.SerializerParameterField(
         specific_serializers={
             "foo-type": ExampleChildSerializer(),
-            "wo-models": serializers.Serializer()},
-        source='*')
+            "wo-models": serializers.Serializer()})
 
 
 class ExampleSerializerWOModel(serializers.Serializer):
