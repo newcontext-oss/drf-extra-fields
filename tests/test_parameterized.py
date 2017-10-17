@@ -5,6 +5,7 @@ import pprint
 import inflection
 
 from django.utils import datastructures
+from django.contrib.auth import models as auth_models
 
 from rest_framework import exceptions
 from rest_framework import serializers
@@ -35,10 +36,11 @@ class ExampleDictFieldSerializer(serializers.Serializer):
     """
 
     types = parameterized.SerializerParameterDictField(
-        inflectors=[inflection.singularize, inflection.parameterize],
         child=parameterized.ParameterizedGenericSerializer(allow_null=True),
-        specific_serializers=test_serializers.ExampleTypeFieldSerializer(
-        ).fields['type']._specific_serializers)
+        key_child=parameterized.SerializerParameterField(
+            inflectors=[inflection.singularize, inflection.parameterize],
+            specific_serializers=test_serializers.ExampleTypeFieldSerializer(
+            ).fields['type']._specific_serializers, skip=False))
 
     def create(self, validated_data):
         """
@@ -49,6 +51,29 @@ class ExampleDictFieldSerializer(serializers.Serializer):
             for type_, child_data in validated_data["types"].items()}}
 
 
+class ExampleDefaultTypeSerializer(
+        parameterized.ParameterizedGenericSerializer):
+    """
+    A simple serializer for testing defalt parameter handling.
+    """
+
+    type = parameterized.SerializerParameterField(
+        specific_serializers={'foo-type': serializers.Serializer()},
+        default='foo-type')
+
+
+class ExampleOptionalTypeSerializer(
+        parameterized.ParameterizedGenericSerializer):
+    """
+    A simple serializer for testing when the parameter is not required.
+    """
+
+    type = parameterized.SerializerParameterField(
+        specific_serializers={
+            'foo-type': test_serializers.ExampleChildSerializer()},
+        required=False)
+
+
 class ExampleSiblingFieldSerializer(serializers.Serializer):
     """
     A simple serializer for testing a dict field parameter.
@@ -56,7 +81,7 @@ class ExampleSiblingFieldSerializer(serializers.Serializer):
 
     type = parameterized.SerializerParameterField(
         specific_serializers=test_serializers.ExampleTypeFieldSerializer(
-        ).fields['type']._specific_serializers, source='attributes')
+        ).fields['type']._specific_serializers)
     attributes = parameterized.ParameterizedGenericSerializer(
         parameter_field_name='type')
 
@@ -64,10 +89,11 @@ class ExampleSiblingFieldSerializer(serializers.Serializer):
         """
         Delegate to the specific serializer.
         """
-        validated_data["type"] = self.fields['type'].parameters[
-            type(validated_data['attributes'].serializer)]
-        validated_data["attributes"] = validated_data[
+        instance = validated_data[
             "attributes"].serializer.create(validated_data["attributes"])
+        validated_data["type"] = self.fields['type'].lookup_parameter(
+            instance)
+        validated_data["attributes"] = instance
         return validated_data
 
 
@@ -180,6 +206,39 @@ class TestParameterizedSerializerFields(test.APITestCase):
             create_response.data["type"][0].lower(),
             'Wrong invalid parameter validation error')
 
+    def test_invalid_instance(self):
+        """
+        Test unknown instance type validation.
+        """
+        wrong_instance = test_serializers.ExampleTypeFieldSerializer(
+            instance=auth_models.User.objects.create())
+        with self.assertRaises(exceptions.ValidationError) as cm:
+            wrong_instance.data
+        self.assertIn(
+            'could not lookup parameter from',
+            cm.exception.detail["type"][0].lower(),
+            'Wrong instance type validation error')
+
+    def test_default_parameter(self):
+        """
+        Test a parameter field that has a default value.
+        """
+        default_serializer = ExampleDefaultTypeSerializer(
+            instance=auth_models.User.objects.create())
+        self.assertEqual(
+            default_serializer.data, {'type': 'foo-type'},
+            'Wrong default parameter serialized value')
+
+    def test_optional_parameter(self):
+        """
+        Test a parameter field that is not required.
+        """
+        optional_serializer = ExampleOptionalTypeSerializer(
+            instance=auth_models.User.objects.create())
+        self.assertEqual(
+            optional_serializer.data, {},
+            'Wrong optional parameter serialized value')
+
     def test_parameterized_field_parameters(self):
         """
         Test referencing reverse parameter lookup.
@@ -204,14 +263,14 @@ class TestParameterizedSerializerFields(test.APITestCase):
         parent = ExampleSiblingFieldSerializer(data=self.sibling_field_data)
         parent.is_valid(raise_exception=True)
         save_result = parent.save()
+        instance = models.Person.objects.get()
         sibling_field_value = copy.deepcopy(self.sibling_field_data)
-        sibling_field_value["attributes"] = models.Person.objects.get()
+        sibling_field_value['attributes'] = instance
         self.assertEqual(
             save_result, sibling_field_value,
             'Wrong sibling field serializer save results')
         sibling_field_data = copy.deepcopy(self.sibling_field_data)
-        sibling_field_data["attributes"]["id"] = str(
-                sibling_field_value["attributes"].uuid)
+        sibling_field_data["attributes"]["id"] = str(instance.uuid)
         self.assertEqual(
             parent.data, sibling_field_data,
             'Wrong sibling field serializer representation')

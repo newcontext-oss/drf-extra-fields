@@ -12,10 +12,9 @@ from django import urls
 from django.db import models
 from django.utils import functional
 
+from rest_framework import fields
 from rest_framework import serializers
-from django.utils import six
 from rest_framework.utils import serializer_helpers
-from rest_framework.utils import html
 
 from . import composite
 
@@ -115,28 +114,35 @@ class SerializerParameterValidator(object):
 
     def __call__(self, value):
         """
-        Omit the field unless configured otherwise.
+        Lookup specific serializer for parameter and omit the field.
         """
+        self.field.lookup_serializer(value)
         if self.field.skip:
-            raise serializers.SkipField(
+            raise fields.SkipField(
                 "Don't include generic type field in internal value")
         return value
 
 
-class SerializerParameterFieldBase(serializers.Field, composite.Cloner):
+class SerializerParameterField(composite.ParentField):
     """
     Map serialized parameter to the specific serializer and back.
     """
 
     default_error_messages = {
         'unknown': (
-            'No specific serializer available for parameter {value!r}'),
+            'No specific serializer available for parameter {parameter!r}'),
         'serializer': (
             'No parameter found for the specific serializer, {value!r}'),
         'mismatch': (
-            'The parameter, {data!r}, '
-            'does not match the looked up parameter, {parameter!r}'),
+            'The parameter, {parameter!r}, '
+            'does not match the looked up parameter, {by_type!r}'),
+        'instance': (
+            'Could not lookup parameter from {instance!r}'),
     }
+
+    child = fields._UnvalidatedField(
+        label='Parameter',
+        help_text='the parameter that identifies the specific serializer')
 
     def __init__(
             self,
@@ -159,7 +165,7 @@ class SerializerParameterFieldBase(serializers.Field, composite.Cloner):
         If both are given, items in `specific_serializers*` override items
         derived from `urlconf`.
         """
-        super(SerializerParameterFieldBase, self).__init__(**kwargs)
+        super(SerializerParameterField, self).__init__(**kwargs)
 
         assert (
             urlconf or
@@ -192,7 +198,7 @@ class SerializerParameterFieldBase(serializers.Field, composite.Cloner):
         """
         Tell the generic serializer to get the specific serializers from us.
         """
-        super(SerializerParameterFieldBase, self).bind(field_name, parent)
+        super(SerializerParameterField, self).bind(field_name, parent)
         self.bind_parameter_field(parent)
 
     def merge_serializer_parameters(self):
@@ -237,47 +243,48 @@ class SerializerParameterFieldBase(serializers.Field, composite.Cloner):
         vars(self).update(**serializers)
         return serializers['parameters']
 
-    def to_internal_value(self, data):
+    def lookup_serializer(self, parameter):
         """
         The specific serializer corresponding to the parameter.
         """
         if (
-                data not in self.specific_serializers and
+                parameter not in self.specific_serializers and
                 self.unhandled_serializer is not None):
-            self.fail('unknown', value=data)
+            self.fail('unknown', parameter=parameter)
 
         # if the generic serializer ends up using a serializer other than
         # `self.child`, such as when the primary serializer looks up the
         # serializer from the view, verify that the type matches.
         child = self.parameter_serializers[0].get_view_serializer()
         if child is not None:
-            parameter = self.parameters.get(type(child))
-            if parameter is None:
+            by_type = self.parameters.get(type(child))
+            if by_type is None:
                 self.fail('serializer', value=child)
-            if data != parameter:
-                self.fail('mismatch', data=data, parameter=parameter)
+            if parameter != by_type:
+                self.fail('mismatch', parameter=parameter, by_type=by_type)
         else:
-            child = self.specific_serializers[data]
+            child = self.specific_serializers[parameter]
 
         for parameter_serializer in self.parameter_serializers:
             parameter_serializer.child = child
         return child
 
-    def to_representation(self, instance):
+    def lookup_parameter(self, instance):
         """
         The parameter corresponding to the specific serializer.
         """
         if isinstance(instance, serializer_helpers.ReturnDict):
             # Serializing self.validated_data
             child = instance.serializer
+            if type(child) not in self.parameters:
+                self.fail('serializer', value=child)
         else:
             # Infer the specific serializer from the instance type
             model = type(instance)
-            # TODO validation error?
-            assert model in self.specific_serializers_by_type, (
-                'Could not lookup parameter from {0!r}'.format(instance))
+            if model not in self.specific_serializers_by_type:
+                self.fail('instance', instance=instance)
             child = self.specific_serializers_by_type[model]
-        data = self.parameters[type(child)]
+        parameter = self.parameters[type(child)]
 
         # if the generic serializer ends up using a serializer other than
         # `self.child`, such as when the primary serializer looks up the
@@ -288,66 +295,85 @@ class SerializerParameterFieldBase(serializers.Field, composite.Cloner):
 
         for parameter_serializer in self.parameter_serializers:
             parameter_serializer.child = child
-        return data
+        return parameter
+
+    def get_attribute(self, instance):
+        """
+        Lookup the parameter if the instance doesn't have the it directly.
+        """
+        try:
+            # Try the attribute from the instance as the parameter
+            parameter = fields.get_attribute(
+                instance, self.source_attrs, exc_on_model_default=(
+                    self.default is not fields.empty or
+                    not self.required))
+        except (KeyError, AttributeError) as exc:
+            try:
+                # Fallback to the parameter from the instance type
+                return self.lookup_parameter(instance)
+            except serializers.ValidationError:
+                # Otherwise fallback to normal feild handling
+                if self.default is not fields.empty:
+                    parameter = self.get_default()
+                    # Set the current parameter and bind the specific
+                    # serializer based on the default parameter
+                    self.lookup_serializer(parameter)
+                    return parameter
+                if not self.required:
+                    child = serializers.Serializer(instance=instance)
+                    for parameter_serializer in self.parameter_serializers:
+                        parameter_serializer.child = child
+                    raise fields.SkipField()
+                msg = (
+                    'Got {exc_type} when attempting to get a value for field '
+                    '`{field}` on serializer `{serializer}`.\nThe serializer '
+                    'field might be named incorrectly and not match '
+                    'any attribute or key on the `{instance}` instance.\n'
+                    'Original exception text was: {exc}.'.format(
+                        exc_type=type(exc).__name__,
+                        field=self.field_name,
+                        serializer=self.parent.__class__.__name__,
+                        instance=instance.__class__.__name__,
+                        exc=exc
+                    )
+                )
+                raise type(exc)(msg)
+        else:
+            # Set the current parameter and bind the specific serializer based
+            # on the actual instance attribute
+            self.lookup_serializer(parameter)
+            return parameter
+
+    def to_internal_value(self, data):
+        """
+        Delegate processing the simple parameter value to the child field.
+        """
+        return self.child.to_internal_value(data)
+
+    def to_representation(self, value):
+        """
+        Delegate processing the simple parameter value to the child field.
+        """
+        return self.child.to_representation(value)
 
 
-class SerializerParameterField(
-        composite.ParentField, SerializerParameterFieldBase):
-    """
-    Map field data to the specific serializer and back.
-    """
-
-
-class SerializerParameterDictField(
-        composite.SerializerDictField, SerializerParameterFieldBase):
+class SerializerParameterDictField(composite.SerializerDictField):
     """
     Map dictionary keys to the specific serializers and back.
     """
     # TODO specific serializer validation errors in parameter dict field
 
-    def __init__(self, *args, **kwargs):
-        """
-        Don't skip the field by default.
-        """
-        kwargs.setdefault('skip', False)
-        super(SerializerParameterDictField, self).__init__(*args, **kwargs)
+    key_child = SerializerParameterField(
+        label='Dict Item Key Parameter',
+        help_text='the key for an individual item in the dictionary '
+        'to be used as the parameter', skip=False)
 
     def bind(self, field_name, parent):
         """
         Tell the generic serializer to get the specific serializers from us.
         """
         super(SerializerParameterDictField, self).bind(field_name, parent)
-        self.bind_parameter_field(self.child.child)
-
-    def to_internal_value(self, data):
-        """
-        Use the dictionary keys as the parameter.x
-        """
-        if html.is_html_input(data):
-            data = html.parse_html_dict(data)
-        if not isinstance(data, dict):
-            self.fail('not_a_dict', input_type=type(data).__name__)
-
-        value = serializer_helpers.ReturnDict(serializer=self)
-        for key, val in data.items():
-            # Set the specific serializer using the key as the parameter
-            SerializerParameterFieldBase.to_internal_value(self, key)
-            value[six.text_type(key)] = self.child.run_validation(val)
-        return value
-
-    def to_representation(self, value):
-        """
-        Use the dictionary keys as the parameter.x
-        """
-        data = serializer_helpers.ReturnDict(serializer=self)
-        for key, val in value.items():
-            # Set the specific serializer using the key as the parameter
-            SerializerParameterFieldBase.to_internal_value(self, key)
-            if val is None:
-                data[six.text_type(key)] = None
-            else:
-                data[six.text_type(key)] = self.child.to_representation(val)
-        return data
+        self.key_child.bind_parameter_field(self.child.child)
 
 
 class ParameterizedGenericSerializer(composite.CompositeSerializer):
@@ -359,7 +385,7 @@ class ParameterizedGenericSerializer(composite.CompositeSerializer):
     exclude_parameterized = False
 
     def __init__(
-            self, instance=None, data=serializers.empty,
+            self, instance=None, data=fields.empty,
             parameter_field_name=None, exclude_parameterized=None, **kwargs):
         """Process generic schema, then delegate the rest to the specific.
 
@@ -426,8 +452,18 @@ class ParameterizedGenericSerializer(composite.CompositeSerializer):
         self.fields
         # Set the current parameter and specific serializer
         parameter_field = self.clone_meta['parameter_field']
-        SerializerParameterFieldBase.to_representation(
-            parameter_field, instance)
+        try:
+            parameter_field.get_attribute(instance)
+        except serializers.SkipField:
+            pass
+        except (AttributeError, KeyError):
+            try:
+                parameter_field.fail('instance', instance=instance)
+            except serializers.ValidationError as exc:
+                # Re-raise under the field name
+                raise serializers.ValidationError({
+                    parameter_field.field_name: exc.detail
+                }, code=exc.detail[0].code)
 
         return super(ParameterizedGenericSerializer, self).to_representation(
             instance)
