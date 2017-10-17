@@ -13,9 +13,7 @@ from django.db import models
 from django.utils import functional
 
 from rest_framework import serializers
-from django.utils import six
 from rest_framework.utils import serializer_helpers
-from rest_framework.utils import html
 
 from . import composite
 
@@ -302,6 +300,11 @@ class SerializerParameterDictField(
     """
     # TODO specific serializer validation errors in parameter dict field
 
+    key_child = SerializerParameterField(
+        label='Dict Item Key Parameter',
+        help_text='the key for an individual item in the dictionary '
+        'to be used as the parameter', skip=False)
+
     def __init__(self, *args, **kwargs):
         """
         Don't skip the field by default.
@@ -314,37 +317,7 @@ class SerializerParameterDictField(
         Tell the generic serializer to get the specific serializers from us.
         """
         super(SerializerParameterDictField, self).bind(field_name, parent)
-        self.bind_parameter_field(self.child.child)
-
-    def to_internal_value(self, data):
-        """
-        Use the dictionary keys as the parameter.x
-        """
-        if html.is_html_input(data):
-            data = html.parse_html_dict(data)
-        if not isinstance(data, dict):
-            self.fail('not_a_dict', input_type=type(data).__name__)
-
-        value = serializer_helpers.ReturnDict(serializer=self)
-        for key, val in data.items():
-            # Set the specific serializer using the key as the parameter
-            SerializerParameterFieldBase.to_internal_value(self, key)
-            value[six.text_type(key)] = self.child.run_validation(val)
-        return value
-
-    def to_representation(self, value):
-        """
-        Use the dictionary keys as the parameter.x
-        """
-        data = serializer_helpers.ReturnDict(serializer=self)
-        for key, val in value.items():
-            # Set the specific serializer using the key as the parameter
-            SerializerParameterFieldBase.to_internal_value(self, key)
-            if val is None:
-                data[six.text_type(key)] = None
-            else:
-                data[six.text_type(key)] = self.child.to_representation(val)
-        return data
+        self.key_child.bind_parameter_field(self.child.child)
 
 
 class ParameterizedGenericSerializer(composite.CompositeSerializer):

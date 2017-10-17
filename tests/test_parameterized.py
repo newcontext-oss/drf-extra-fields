@@ -35,10 +35,11 @@ class ExampleDictFieldSerializer(serializers.Serializer):
     """
 
     types = parameterized.SerializerParameterDictField(
-        inflectors=[inflection.singularize, inflection.parameterize],
         child=parameterized.ParameterizedGenericSerializer(allow_null=True),
-        specific_serializers=test_serializers.ExampleTypeFieldSerializer(
-        ).fields['type']._specific_serializers)
+        key_child=parameterized.SerializerParameterField(
+            inflectors=[inflection.singularize, inflection.parameterize],
+            specific_serializers=test_serializers.ExampleTypeFieldSerializer(
+            ).fields['type']._specific_serializers, skip=False))
 
     def create(self, validated_data):
         """

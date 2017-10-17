@@ -7,6 +7,7 @@ import copy
 from django.utils import functional
 
 from rest_framework.utils import serializer_helpers
+from rest_framework.utils import html
 from rest_framework import serializers
 
 
@@ -125,7 +126,53 @@ class SerializerDictField(SerializerCompositeField, serializers.DictField):
     A dict field that supports full use of the child serializer:
 
     e.g. `save()`.
+
+    Optionally, also accepts a field to process the keys through as well.
     """
+
+    key_child = serializers.CharField(
+        label='Dict Item Key',
+        help_text='the key for an individual item in the dictionary')
+
+    def __init__(self, key_child=None, **kwargs):
+        """
+        Optionally, also accepts a field to process the keys through as well.
+        """
+        super(SerializerDictField, self).__init__(**kwargs)
+
+        if key_child is None:
+            key_child = copy.deepcopy(self.key_child)
+        self.key_child = key_child
+        self.key_child.bind(field_name='', parent=self)
+
+    def to_internal_value(self, data):
+        """
+        Dicts of native values <- Dicts of primitive datatypes.
+        """
+        if html.is_html_input(data):
+            data = html.parse_html_dict(data)
+        if not isinstance(data, dict):
+            self.fail('not_a_dict', input_type=type(data).__name__)
+
+        value = serializer_helpers.ReturnDict(serializer=self)
+        for item_key, item_value in data.items():
+            # Ensure that the key child is executed first
+            item_key = self.key_child.run_validation(item_key)
+            value[item_key] = self.child.run_validation(item_value)
+        return value
+
+    def to_representation(self, value):
+        """
+        List of object instances -> List of dicts of primitive datatypes.
+        """
+        data = serializer_helpers.ReturnDict(serializer=self)
+        for item_key, item_value in value.items():
+            # Ensure that the key child is executed first
+            item_key = self.key_child.to_representation(item_key)
+            data[item_key] = (
+                self.child.to_representation(item_value)
+                if item_value is not None else None)
+        return data
 
 
 class CompositeSerializer(serializers.Serializer, ParentField, Cloner):
