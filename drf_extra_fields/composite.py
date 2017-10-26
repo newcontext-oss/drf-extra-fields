@@ -228,17 +228,20 @@ class CompositeSerializer(serializers.Serializer, ParentField, Cloner):
         # Deserialize our schema
         value = super(CompositeSerializer, self).to_internal_value(data)
 
-        # Include all keys not already processed by our schema.
-        value.update(
-            (key, value) for key, value in data.items()
-            if key not in self.fields)
-
         # Reconstitute and validate the child serializer
         child = self.get_serializer(data=value)
         if child is None:
             raise ValueError(
                 'Must give either a child serializer or be used in the '
                 'context of a view from which to get the serializer')
+
+        # Include all keys not already processed by our schema or that are
+        # consumed by the child.
+        value.update(
+            (key, value) for key, value in data.items()
+            if (key not in self.fields) or (
+                    key not in value and key in child.fields))
+
         child.is_valid(raise_exception=True)
         value = child.validated_data
 

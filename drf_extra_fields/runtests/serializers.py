@@ -2,6 +2,7 @@ from rest_framework import serializers
 
 from drf_extra_fields import relations
 from drf_extra_fields import parameterized
+from drf_extra_fields import unhandled
 
 from . import models
 
@@ -61,6 +62,18 @@ class ExampleSerializerWOModel(serializers.Serializer):
     A simple serialier without a model.
     """
 
+
+class ExampleUnhandledSerializer(unhandled.UnhandledSerializer):
+    """
+    A simple serialier that includes non-field items.
+    """
+
+    class Meta:
+        child = unhandled.UnhandledChildField(
+            source='unhandled', required=False)
+
+    type = serializers.CharField(default='unhandled')
+
     def create(self, validated_data):
         """
         Just return the validated data.
@@ -74,7 +87,8 @@ class ExampleUnhandledTypeFieldSerializer(
     A simple serializer for testing a type field parameter.
     """
 
+    primary = False
+
     type = parameterized.SerializerParameterField(
         specific_serializers={"foo-type": ExampleChildSerializer()},
-        unhandled_serializer=ExampleSerializerWOModel,
-        source='*')
+        unhandled_serializer=ExampleUnhandledSerializer())

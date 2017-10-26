@@ -20,16 +20,18 @@ class UnhandledChildField(fields.DictField):
             if key not in self.parent.fields}
 
 
+default_unhandled_child = UnhandledChildField(source='*', required=False)
+
+
 class UnhandledSerializer(serializers.Serializer):
     """
     Include non-field items after processing fields.
 
-    Set `Meta.unhandled_kwargs` or pass in `unhandled_kwargs` to specify the
-    arguments to be passed to the `rest_framework.fields.DictField` child
-    field to process unhandled items.  For example, include `source` to
-    specify an internal attribute unhandled items should be collected to, or
-    `child` to specify a field to be used to validate individual values in the
-    unhandled data.
+    Set `Meta.child` or pass in `child` to specify the options for the
+    `unhandled.UnhandledChildField` used to process unhandled items.  For
+    example, include `source` to specify an internal attribute unhandled items
+    should be collected to, or `child` to specify a field to be used to
+    validate individual values in the unhandled data.
     """
 
     default_error_messages = {
@@ -39,24 +41,22 @@ class UnhandledSerializer(serializers.Serializer):
 
     def __init__(
             self, instance=None, data=fields.empty,
-            unhandled_kwargs=None, **kwargs):
+            child=None, **kwargs):
         """
         Ensure that a `source` is specified.
         """
+        if child is None:
+            # Support class-based defaults
+            child = getattr(
+                getattr(self, 'Meta', None), 'child', None)
+            if child is None:
+                # Finally default to simple dict processing
+                child = default_unhandled_child
+        self.child = copy.deepcopy(child)
+
         super(UnhandledSerializer, self).__init__(
             instance=instance, data=data, **kwargs)
 
-        if unhandled_kwargs is None:
-            # Take defaults from the class
-            unhandled_kwargs = getattr(
-                getattr(self, 'Meta', None), 'unhandled_kwargs', {})
-        # Avoid mutating the class Meta
-        unhandled_kwargs = copy.deepcopy(unhandled_kwargs)
-        unhandled_kwargs.setdefault('source', '*')
-        unhandled_kwargs.setdefault('required', False)
-        unhandled_kwargs.setdefault('child', fields._UnvalidatedField())
-
-        self.child = UnhandledChildField(**unhandled_kwargs)
         self.child.bind(field_name='', parent=self)
 
     def to_internal_value(self, data):

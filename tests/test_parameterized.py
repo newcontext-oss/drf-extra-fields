@@ -510,20 +510,61 @@ class TestParameterizedSerializerFields(test.APITestCase):
             parameter, 'people',
             'Wrong looked up type parameter from instance')
 
-    def test_unhandled_parameter(self):
+    def test_unhandled_parameter_deserialize(self):
         """
-        Test using a default serializer for unknown parameters.
+        Test using a default serializer on to_internal_value.
         """
-        invalid_parameter_data = dict(self.type_field_data, type="bar-type")
-        create_response = self.client.post(
-            '/types-unhandled/', invalid_parameter_data, format='json')
+        unhandled_parameter_data = dict(self.type_field_data, type="bar-type")
+        unhandled_serializer = (
+            test_serializers.ExampleUnhandledTypeFieldSerializer(
+                data=unhandled_parameter_data))
+        unhandled_serializer.is_valid(raise_exception=True)
+        unhandled_data = self.type_field_data.copy()
+        del unhandled_data['type']
         self.assertEqual(
-            create_response.status_code, 200,
+            unhandled_serializer.validated_data,
+            dict(unhandled=unhandled_data, type="bar-type"),
+            'Wrong unhandled parameter deserialized value')
+
+    def test_unhandled_parameter_serialize(self):
+        """
+        Test using a default serializer on to_representation.
+        """
+        unhandled_data = self.type_field_data.copy()
+        del unhandled_data['type']
+        unhandled_parameter_instance = dict(
+            unhandled=unhandled_data, type="bar-type")
+        unhandled_serializer = (
+            test_serializers.ExampleUnhandledTypeFieldSerializer(
+                instance=unhandled_parameter_instance))
+        self.assertEqual(
+            unhandled_serializer.data,
+            dict(self.type_field_data, type="bar-type"),
+            'Wrong unhandled parameter serialized value')
+
+    def test_unhandled_parameter_instance(self):
+        """
+        Test using a default serializer on to_representation with an instance.
+        """
+        unhandled_serializer = (
+            test_serializers.ExampleUnhandledTypeFieldSerializer(
+                instance=auth_models.User.objects.create()))
+        self.assertEqual(
+            unhandled_serializer.data,
+            {'type': 'unhandled'},
+            'Wrong unhandled instance serialized value')
+
+    def test_unhandled_parameter_post(self):
+        """
+        Test using a default serializer for unknown parameters on POST.
+        """
+        unhandled_parameter_data = dict(self.type_field_data, type="bar-type")
+        create_response = self.client.post(
+            '/types-unhandled/', unhandled_parameter_data, format='json')
+        self.assertEqual(
+            create_response.status_code, 201,
             'Unhandled type create request failed:\n{0}'.format(
                 pprint.pformat(create_response.data)))
-        self.assertIn(
-            'type', create_response.data,
-            'Missing invalid parameter validation error')
         self.assertEqual(
-            'bar-type', create_response.data['type'],
-            'Wrong unhandled type value')
+            create_response.data, unhandled_parameter_data,
+            'Wrong unhandled create request response')

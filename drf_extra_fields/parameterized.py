@@ -101,28 +101,6 @@ def lookup_serializer_parameters(
         specific_serializers_by_type=specific_serializers_by_type)
 
 
-class SerializerParameterValidator(object):
-    """
-    Omit the parameter field by default.
-    """
-
-    def set_context(self, serializer_field):
-        """
-        Capture the field.
-        """
-        self.field = serializer_field
-
-    def __call__(self, value):
-        """
-        Lookup specific serializer for parameter and omit the field.
-        """
-        self.field.lookup_serializer(value)
-        if self.field.skip:
-            raise fields.SkipField(
-                "Don't include generic type field in internal value")
-        return value
-
-
 class SerializerParameterField(composite.ParentField):
     """
     Map serialized parameter to the specific serializer and back.
@@ -180,7 +158,6 @@ class SerializerParameterField(composite.ParentField):
         self.unhandled_serializer = unhandled_serializer
 
         self.skip = skip
-        self.validators.append(SerializerParameterValidator())
 
         self.parameter_serializers = []
 
@@ -243,31 +220,63 @@ class SerializerParameterField(composite.ParentField):
         vars(self).update(**serializers)
         return serializers['parameters']
 
+    def run_validation(self, data=serializers.empty):
+        """
+        Omit the field unless configured otherwise.
+        """
+        if data is not serializers.empty:
+            # Lookup specific serializer for parameter
+            self.lookup_serializer(data)
+
+        value = super(SerializerParameterField, self).run_validation(
+            data=data)
+
+        # Preserve the parameter if we're using the unhandled parameter
+        # serializer.  IOW, do not skip.
+        unhandled = (
+            # TODO dict field
+            data not in self.specific_serializers and
+            self.unhandled_serializer is not None)
+        if not unhandled and self.skip:
+            raise serializers.SkipField(
+                "Don't include generic type field in internal value")
+
+        return value
+
     def lookup_serializer(self, parameter):
         """
         The specific serializer corresponding to the parameter.
         """
-        if (
-                parameter not in self.specific_serializers and
-                self.unhandled_serializer is not None):
-            self.fail('unknown', parameter=parameter)
-
-        # if the generic serializer ends up using a serializer other than
-        # `self.child`, such as when the primary serializer looks up the
-        # serializer from the view, verify that the type matches.
-        child = self.parameter_serializers[0].get_view_serializer()
-        if child is not None:
-            by_type = self.parameters.get(type(child))
-            if by_type is None:
-                self.fail('serializer', value=child)
-            if parameter != by_type:
-                self.fail('mismatch', parameter=parameter, by_type=by_type)
+        unhandled = False
+        if parameter not in self.specific_serializers:
+            if self.unhandled_serializer is not None:
+                unhandled = True
+                child = self.unhandled_serializer
+            else:
+                self.fail('unknown', parameter=parameter)
         else:
-            child = self.specific_serializers[parameter]
+            # if the generic serializer ends up using a serializer other than
+            # `self.child`, such as when the primary serializer looks up the
+            # serializer from the view, verify that the type matches.
+            child = self.parameter_serializers[0].get_view_serializer()
+            if child is not None:
+                by_type = self.parameters.get(type(child))
+                if by_type is None:
+                    self.fail('serializer', value=child)
+                if parameter != by_type:
+                    self.fail('mismatch', parameter=parameter, by_type=by_type)
+            else:
+                child = self.specific_serializers[parameter]
 
+        # Tell the parameterizer serializer which specific serializer to use
         for parameter_serializer in self.parameter_serializers:
             parameter_serializer.child = child
-        return child
+
+        if unhandled:
+            # Preserve the parameter on return for unhandled parameters
+            return {self.field_name: parameter}
+        else:
+            return child
 
     def lookup_parameter(self, instance):
         """
@@ -278,13 +287,19 @@ class SerializerParameterField(composite.ParentField):
             child = instance.serializer
             if type(child) not in self.parameters:
                 self.fail('serializer', value=child)
+            parameter = self.parameters[type(child)]
         else:
             # Infer the specific serializer from the instance type
             model = type(instance)
-            if model not in self.specific_serializers_by_type:
-                self.fail('instance', instance=instance)
-            child = self.specific_serializers_by_type[model]
-        parameter = self.parameters[type(child)]
+            child = self.specific_serializers_by_type.get(model)
+            if child is None:
+                if self.unhandled_serializer is not None:
+                    child = self.unhandled_serializer
+                    parameter = serializers.empty
+                else:
+                    self.fail('instance', instance=instance)
+            else:
+                parameter = self.parameters[type(child)]
 
         # if the generic serializer ends up using a serializer other than
         # `self.child`, such as when the primary serializer looks up the

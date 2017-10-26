@@ -14,7 +14,8 @@ class ExampleUnhandledSerializer(unhandled.UnhandledSerializer):
     foo = serializers.CharField(source='qux', required=False)
 
     class Meta:
-        unhandled_kwargs = {'source': 'unhandled'}
+        child = unhandled.UnhandledChildField(
+            source='unhandled', required=False)
 
     def create(self, validated_data):
         """
@@ -80,3 +81,15 @@ class TestUnhandledSerializerFields(test.APITestCase):
         self.assertEqual(
             unhandled_serializer.data, {'foo': 'foo'},
             'Wrong missing unhanlded serialized value')
+
+    def test_unhandled_default_child(self):
+        """
+        Unhandled serializers fallback to a default child field.
+        """
+        unhandled_serializer = unhandled.UnhandledSerializer()
+        self.assertIsInstance(
+            unhandled_serializer.child, unhandled.UnhandledChildField,
+            'Wrong unhandled serializer child field type')
+        self.assertIsNot(
+            unhandled_serializer.child, unhandled.default_unhandled_child,
+            'Unhandled serializer child field default not copied')
